@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- 外のものは何も読み込まない（一覧はリンクの「#」の後ろにあり、このページの中だけで読む） -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<meta name="robots" content="noindex">
+<meta property="og:title" content="いきたいマップのリスト">
+<meta property="og:description" content="行きたい場所のリストが届きました。開くと一覧を見られます">
+<meta property="og:type" content="website">
+<title>いきたいマップのリスト</title>
+<style>
+  /* アプリと同じ配色（UI/Theme.swift: brandFill・brand・canvas・paper・subInk） */
+  :root { --brand: #0F6E6C; --fill: #0F6E6C; --ink: #1C1C1E; --sub: #5E5E63; --canvas: #F4EEDD; --paper: #FFFCF3; --line: #D8CFB6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --brand: #5CC9C3; --ink: #F2F2F7; --sub: #AEAEB2; --canvas: #1B1A17; --paper: #2C2C2E; --line: #5A5A5E; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--canvas); color: var(--ink); line-height: 1.6;
+         font-family: -apple-system, "Hiragino Maru Gothic ProN", "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 28px 16px 48px; }
+  .eyebrow { color: var(--brand); font-weight: 700; font-size: 0.9rem; margin: 0; }
+  h1 { font-size: 1.6rem; line-height: 1.3; margin: 4px 0; overflow-wrap: anywhere; }
+  .count { color: var(--sub); margin: 0 0 20px; }
+  .open { display: block; text-align: center; background: var(--fill); color: #fff; text-decoration: none;
+          font-weight: 700; font-size: 1.05rem; padding: 14px; border-radius: 999px; }
+  .note { color: var(--sub); font-size: 0.85rem; margin: 8px 4px 24px; }
+  ol { list-style: none; padding: 0; margin: 0; background: var(--paper); border: 1px solid var(--line); border-radius: 16px; }
+  li { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--line); }
+  li:first-child { border-top: none; }
+  .emoji { flex: none; width: 40px; height: 40px; border-radius: 10px; background: var(--canvas);
+           display: grid; place-items: center; font-size: 1.3rem; }
+  .text { flex: 1; min-width: 0; }
+  .name { font-weight: 600; overflow-wrap: anywhere; }
+  .category { color: var(--sub); font-size: 0.8rem; }
+  li a { color: var(--brand); font-size: 0.9rem; white-space: nowrap; text-decoration: none; padding: 12px 0 12px 8px; }
+  .about { margin-top: 32px; padding: 16px; background: var(--paper); border: 1px solid var(--line); border-radius: 16px; }
+  .about h2 { font-size: 1rem; margin: 0 0 4px; }
+  .about p { margin: 0 0 8px; font-size: 0.9rem; }
+  .about a, footer a { color: var(--brand); font-weight: 600; }
+  footer { margin-top: 32px; color: var(--sub); font-size: 0.8rem; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">いきたいマップのリスト</p>
+  <h1 id="title">リストを読み込んでいます…</h1>
+  <p class="count" id="count"></p>
+  <div id="actions" hidden>
+    <a class="open" id="open" href="ikitaimap://import">いきたいマップに入れる</a>
+    <p class="note">アプリが開き、まだ保存していない場所をまとめて保存できます。アプリが無いときは、下の「App Storeで見る」から入れてから、もう一度このボタンを押してください。</p>
+  </div>
+  <ol id="list" hidden></ol>
+  <section class="about">
+    <h2>「いきたいマップ」とは</h2>
+    <p>SNSや地図で見つけた「いつか行きたい場所」を地図にためて、次のおでかけで選べるiPhoneアプリです。</p>
+    <a href="https://apps.apple.com/app/id6816359193">App Storeで見る</a>
+  </section>
+  <footer>
+    リストの中身はこのページのリンクの中にだけあり、開発者のサーバーには送られません。
+    <a href="./">サポート</a> ・ <a href="privacy.html">プライバシーポリシー</a>
+  </footer>
+</main>
+<script>
+  // 形式（v1・アプリの Domain/SpotListLink.swift と同じ）:
+  // リンクの「#」の後ろ = base64url( deflate-raw( {"v":1,"t":見出し,"p":[[名前, 緯度×10⁵, 経度×10⁵, カテゴリ, 場所ID?], …]} ) )
+  const CATEGORIES = {
+    cafe: ["☕️", "カフェ"], food: ["🍴", "ごはん"], sightseeing: ["📸", "観光"], play: ["🎡", "遊び"],
+    shopping: ["🛍️", "買い物"], nature: ["🌿", "自然"], other: ["📍", "その他"]
+  };
+  const MAX_PLACES = 30;
+
+  async function decode(fragment) {
+    const b64 = fragment.replace(/-/g, "+").replace(/_/g, "/");
+    const bytes = Uint8Array.from(atob(b64 + "===".slice((b64.length + 3) % 4)), c => c.charCodeAt(0));
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    const data = JSON.parse(await new Response(stream).text());
+    if (data.v !== 1 || !Array.isArray(data.p)) throw new Error("format");
+    const places = data.p.filter(p => Array.isArray(p) && typeof p[0] === "string" && p[0].trim()
+                                    && Number.isInteger(p[1]) && Number.isInteger(p[2])).slice(0, MAX_PLACES);
+    if (places.length === 0) throw new Error("empty");
+    const title = typeof data.t === "string" && data.t.trim() ? data.t.trim().slice(0, 20) : "行きたい場所";
+    return { title, places };
+  }
+
+  function element(tag, className, text) {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text !== undefined) el.textContent = text;
+    return el;
+  }
+
+  // 開いたままのページで「#」の後ろだけが変わったとき（別のリストのリンクを開いた）は読み直す
+  addEventListener("hashchange", () => location.reload());
+
+  (async () => {
+    const fragment = location.hash.slice(1);
+    const title = document.getElementById("title");
+    if (!fragment) {
+      title.textContent = "リストが入っていません";
+      document.getElementById("count").textContent = "このページは「いきたいマップ」から送られたリストを表示します。";
+      return;
+    }
+    try {
+      const { title: name, places } = await decode(fragment);
+      title.textContent = name;
+      document.title = `${name} - いきたいマップのリスト`;
+      document.getElementById("count").textContent = `${places.length}か所`;
+      document.getElementById("open").href = "ikitaimap://import#" + fragment;
+      document.getElementById("actions").hidden = false;
+      const list = document.getElementById("list");
+      for (const [placeName, lat, lon, category] of places) {
+        const [emoji, label] = CATEGORIES[category] || CATEGORIES.other;
+        const li = element("li");
+        const text = element("div", "text");
+        text.append(element("div", "name", placeName.trim().slice(0, 80)), element("div", "category", label));
+        const map = element("a", "", "地図で見る");
+        map.href = `https://maps.apple.com/?ll=${lat / 1e5},${lon / 1e5}&q=${encodeURIComponent(placeName)}`;
+        li.append(element("span", "emoji", emoji), text, map);
+        list.append(li);
+      }
+      list.hidden = false;
+    } catch (e) {
+      title.textContent = "リストを読み取れませんでした";
+      document.getElementById("count").textContent =
+        "リンクが途中で切れていないか、送ってくれた人に確かめてください。";
+    }
+  })();
+</script>
+</body>
+</html>
